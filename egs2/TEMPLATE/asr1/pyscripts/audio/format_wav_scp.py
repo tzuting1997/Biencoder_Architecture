@@ -276,7 +276,7 @@ def main():
                                 {uttid: (wave, rate)},
                                 scp=fout,
                                 append=True,
-                                write_function=f"soundfile_{suf}",
+                                write_function=f"soundfile",
                             )
                         else:
                             owavpath = str(wavdir / f"{uttid}.{args.audio_format}")

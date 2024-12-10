@@ -23,6 +23,7 @@ from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.label_smoothing_loss import (  # noqa: H301
     LabelSmoothingLoss,
 )
+import logging
 
 if V(torch.__version__) >= V("1.6.0"):
     from torch.cuda.amp import autocast
@@ -44,7 +45,8 @@ class ESPnetASRModel(AbsESPnetModel):
         specaug: Optional[AbsSpecAug],
         normalize: Optional[AbsNormalize],
         preencoder: Optional[AbsPreEncoder],
-        encoder: AbsEncoder,
+        encoder_man: AbsEncoder,
+        encoder_eng: AbsEncoder,
         postencoder: Optional[AbsPostEncoder],
         decoder: Optional[AbsDecoder],
         ctc: CTC,
@@ -97,58 +99,58 @@ class ESPnetASRModel(AbsESPnetModel):
         self.normalize = normalize
         self.preencoder = preencoder
         self.postencoder = postencoder
-        self.encoder = encoder
+        self.encoder_man = encoder_man
+        self.encoder_eng = encoder_eng
 
-        if not hasattr(self.encoder, "interctc_use_conditioning"):
-            self.encoder.interctc_use_conditioning = False
-        if self.encoder.interctc_use_conditioning:
-            self.encoder.conditioning_layer = torch.nn.Linear(
-                vocab_size, self.encoder.output_size()
-            )
+        # if not hasattr(self.encoder, "interctc_use_conditioning"):
+        #     self.encoder.interctc_use_conditioning = False
+        # if self.encoder.interctc_use_conditioning:
+        #     self.encoder.conditioning_layer = torch.nn.Linear(
+        #         vocab_size, self.encoder.output_size()
+        #     )
 
         self.use_transducer_decoder = joint_network is not None
 
-        self.error_calculator = None
+        # self.error_calculator = None
 
         if self.use_transducer_decoder:
-            from warprnnt_pytorch import RNNTLoss
+            pass
+            # from warprnnt_pytorch import RNNTLoss
 
-            self.decoder = decoder
-            self.joint_network = joint_network
+            # self.decoder = decoder
+            # self.joint_network = joint_network
 
-            self.criterion_transducer = RNNTLoss(
-                blank=self.blank_id,
-                fastemit_lambda=0.0,
-            )
+            # self.criterion_transducer = RNNTLoss(
+            #     blank=self.blank_id,
+            #     fastemit_lambda=0.0,
+            # )
 
-            if report_cer or report_wer:
-                self.error_calculator_trans = ErrorCalculatorTransducer(
-                    decoder,
-                    joint_network,
-                    token_list,
-                    sym_space,
-                    sym_blank,
-                    report_cer=report_cer,
-                    report_wer=report_wer,
-                )
-            else:
-                self.error_calculator_trans = None
+            # if report_cer or report_wer:
+            #     self.error_calculator_trans = ErrorCalculatorTransducer(
+            #         decoder,
+            #         joint_network,
+            #         token_list,
+            #         sym_space,
+            #         sym_blank,
+            #         report_cer=report_cer,
+            #         report_wer=report_wer,
+            #     )
+            # else:
+            #     self.error_calculator_trans = None
 
-                if self.ctc_weight != 0:
-                    self.error_calculator = ErrorCalculator(
-                        token_list, sym_space, sym_blank, report_cer, report_wer
-                    )
+            #     if self.ctc_weight != 0:
+            #         self.error_calculator = ErrorCalculator(
+            #             token_list, sym_space, sym_blank, report_cer, report_wer
+            #         )
         else:
             # we set self.decoder = None in the CTC mode since
             # self.decoder parameters were never used and PyTorch complained
             # and threw an Exception in the multi-GPU experiment.
             # thanks Jeff Farris for pointing out the issue.
-            if ctc_weight < 1.0:
-                assert (
-                    decoder is not None
-                ), "decoder should not be None when attention is used"
-
-            self.decoder = decoder
+            if ctc_weight == 1.0:
+                self.decoder = None
+            else:
+                self.decoder = decoder
 
             self.criterion_att = LabelSmoothingLoss(
                 size=vocab_size,
@@ -167,19 +169,19 @@ class ESPnetASRModel(AbsESPnetModel):
         else:
             self.ctc = ctc
 
-        self.extract_feats_in_collect_stats = extract_feats_in_collect_stats
+        # self.extract_feats_in_collect_stats = extract_feats_in_collect_stats
 
-        self.is_encoder_whisper = "Whisper" in type(self.encoder).__name__
+        # self.is_encoder_whisper = "Whisper" in type(self.encoder).__name__
 
-        if self.is_encoder_whisper:
-            assert (
-                self.frontend is None
-            ), "frontend should be None when using full Whisper model"
+        # if self.is_encoder_whisper:
+        #     assert (
+        #         self.frontend is None
+        #     ), "frontend should be None when using full Whisper model"
 
-        if lang_token_id != -1:
-            self.lang_token_id = torch.tensor([[lang_token_id]])
-        else:
-            self.lang_token_id = None
+        # if lang_token_id != -1:
+        #     self.lang_token_id = torch.tensor([[lang_token_id]])
+        # else:
+        #     self.lang_token_id = None
 
     def forward(
         self,
@@ -212,13 +214,13 @@ class ESPnetASRModel(AbsESPnetModel):
 
         # for data-parallel
         text = text[:, : text_lengths.max()]
-
+        logging.info(f"text-{text}")
         # 1. Encoder
-        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+        moe_encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
         intermediate_outs = None
-        if isinstance(encoder_out, tuple):
-            intermediate_outs = encoder_out[1]
-            encoder_out = encoder_out[0]
+        if isinstance(moe_encoder_out, tuple):
+            intermediate_outs = moe_encoder_out[1]
+            moe_encoder_out = moe_encoder_out[0]
 
         loss_att, acc_att, cer_att, wer_att = None, None, None, None
         loss_ctc, cer_ctc = None, None
@@ -228,82 +230,83 @@ class ESPnetASRModel(AbsESPnetModel):
         # 1. CTC branch
         if self.ctc_weight != 0.0:
             loss_ctc, cer_ctc = self._calc_ctc_loss(
-                encoder_out, encoder_out_lens, text, text_lengths
+                moe_encoder_out, encoder_out_lens, text, text_lengths
             )
 
             # Collect CTC branch stats
             stats["loss_ctc"] = loss_ctc.detach() if loss_ctc is not None else None
             stats["cer_ctc"] = cer_ctc
 
-        # Intermediate CTC (optional)
-        loss_interctc = 0.0
-        if self.interctc_weight != 0.0 and intermediate_outs is not None:
-            for layer_idx, intermediate_out in intermediate_outs:
-                # we assume intermediate_out has the same length & padding
-                # as those of encoder_out
+        # # Intermediate CTC (optional)
+        # loss_interctc = 0.0
+        # if self.interctc_weight != 0.0 and intermediate_outs is not None:
+        #     for layer_idx, intermediate_out in intermediate_outs:
+        #         # we assume intermediate_out has the same length & padding
+        #         # as those of encoder_out
 
-                # use auxillary ctc data if specified
-                loss_ic = None
-                if self.aux_ctc is not None:
-                    idx_key = str(layer_idx)
-                    if idx_key in self.aux_ctc:
-                        aux_data_key = self.aux_ctc[idx_key]
-                        aux_data_tensor = kwargs.get(aux_data_key, None)
-                        aux_data_lengths = kwargs.get(aux_data_key + "_lengths", None)
+        #         # use auxillary ctc data if specified
+        #         loss_ic = None
+        #         if self.aux_ctc is not None:
+        #             idx_key = str(layer_idx)
+        #             if idx_key in self.aux_ctc:
+        #                 aux_data_key = self.aux_ctc[idx_key]
+        #                 aux_data_tensor = kwargs.get(aux_data_key, None)
+        #                 aux_data_lengths = kwargs.get(aux_data_key + "_lengths", None)
 
-                        if aux_data_tensor is not None and aux_data_lengths is not None:
-                            loss_ic, cer_ic = self._calc_ctc_loss(
-                                intermediate_out,
-                                encoder_out_lens,
-                                aux_data_tensor,
-                                aux_data_lengths,
-                            )
-                        else:
-                            raise Exception(
-                                "Aux. CTC tasks were specified but no data was found"
-                            )
-                if loss_ic is None:
-                    loss_ic, cer_ic = self._calc_ctc_loss(
-                        intermediate_out, encoder_out_lens, text, text_lengths
-                    )
-                loss_interctc = loss_interctc + loss_ic
+        #                 if aux_data_tensor is not None and aux_data_lengths is not None:
+        #                     loss_ic, cer_ic = self._calc_ctc_loss(
+        #                         intermediate_out,
+        #                         encoder_out_lens,
+        #                         aux_data_tensor,
+        #                         aux_data_lengths,
+        #                     )
+        #                 else:
+        #                     raise Exception(
+        #                         "Aux. CTC tasks were specified but no data was found"
+        #                     )
+        #         if loss_ic is None:
+        #             loss_ic, cer_ic = self._calc_ctc_loss(
+        #                 intermediate_out, encoder_out_lens, text, text_lengths
+        #             )
+        #         loss_interctc = loss_interctc + loss_ic
 
-                # Collect Intermedaite CTC stats
-                stats["loss_interctc_layer{}".format(layer_idx)] = (
-                    loss_ic.detach() if loss_ic is not None else None
-                )
-                stats["cer_interctc_layer{}".format(layer_idx)] = cer_ic
+        #         # Collect Intermedaite CTC stats
+        #         stats["loss_interctc_layer{}".format(layer_idx)] = (
+        #             loss_ic.detach() if loss_ic is not None else None
+        #         )
+        #         stats["cer_interctc_layer{}".format(layer_idx)] = cer_ic
 
-            loss_interctc = loss_interctc / len(intermediate_outs)
+        #     loss_interctc = loss_interctc / len(intermediate_outs)
 
-            # calculate whole encoder loss
-            loss_ctc = (
-                1 - self.interctc_weight
-            ) * loss_ctc + self.interctc_weight * loss_interctc
+        #     # calculate whole encoder loss
+        #     loss_ctc = (
+        #         1 - self.interctc_weight
+        #     ) * loss_ctc + self.interctc_weight * loss_interctc
 
         if self.use_transducer_decoder:
-            # 2a. Transducer decoder branch
-            (
-                loss_transducer,
-                cer_transducer,
-                wer_transducer,
-            ) = self._calc_transducer_loss(
-                encoder_out,
-                encoder_out_lens,
-                text,
-            )
+            pass
+            # # 2a. Transducer decoder branch
+            # (
+            #     loss_transducer,
+            #     cer_transducer,
+            #     wer_transducer,
+            # ) = self._calc_transducer_loss(
+            #     encoder_out,
+            #     encoder_out_lens,
+            #     text,
+            # )
 
-            if loss_ctc is not None:
-                loss = loss_transducer + (self.ctc_weight * loss_ctc)
-            else:
-                loss = loss_transducer
+            # if loss_ctc is not None:
+            #     loss = loss_transducer + (self.ctc_weight * loss_ctc)
+            # else:
+            #     loss = loss_transducer
 
-            # Collect Transducer branch stats
-            stats["loss_transducer"] = (
-                loss_transducer.detach() if loss_transducer is not None else None
-            )
-            stats["cer_transducer"] = cer_transducer
-            stats["wer_transducer"] = wer_transducer
+            # # Collect Transducer branch stats
+            # stats["loss_transducer"] = (
+            #     loss_transducer.detach() if loss_transducer is not None else None
+            # )
+            # stats["cer_transducer"] = cer_transducer
+            # stats["wer_transducer"] = wer_transducer
 
         else:
             # 2b. Attention decoder branch
@@ -372,40 +375,48 @@ class ESPnetASRModel(AbsESPnetModel):
         # 4. Forward encoder
         # feats: (Batch, Length, Dim)
         # -> encoder_out: (Batch, Length2, Dim2)
-        if self.encoder.interctc_use_conditioning:
-            encoder_out, encoder_out_lens, _ = self.encoder(
-                feats, feats_lengths, ctc=self.ctc
-            )
+        if self.encoder_man.interctc_use_conditioning:
+            pass
+            # encoder_out, encoder_out_lens, _ = self.encoder(
+            #     feats, feats_lengths, ctc=self.ctc
+            # )
         else:
-            encoder_out, encoder_out_lens, _ = self.encoder(feats, feats_lengths)
+            encoder_man_out, encoder_out_lens, _ = self.encoder_man(feats, feats_lengths)
+            encoder_eng_out, encoder_out_lens, _ = self.encoder_eng(feats, feats_lengths)
         intermediate_outs = None
-        if isinstance(encoder_out, tuple):
-            intermediate_outs = encoder_out[1]
-            encoder_out = encoder_out[0]
+        if isinstance(encoder_man_out, tuple):
+            intermediate_outs = encoder_man_out[1]
+            encoder_man_out = encoder_man_out[0]
+        if isinstance(encoder_eng_out, tuple):
+            intermediate_outs = encoder_eng_out[1]
+            encoder_eng_out = encoder_eng_out[0]
 
         # Post-encoder, e.g. NLU
         if self.postencoder is not None:
-            encoder_out, encoder_out_lens = self.postencoder(
-                encoder_out, encoder_out_lens
+            man_weight, eng_weight = self.postencoder(
+                encoder_man_out, encoder_eng_out, encoder_out_lens
             )
-
-        assert encoder_out.size(0) == speech.size(0), (
-            encoder_out.size(),
+            logging.info(f"man_weight-{man_weight}")
+            logging.info(f"eng_weight-{eng_weight}")
+            moe_encoder_out = torch.add(torch.mul(man_weight, encoder_man_out), torch.mul(eng_weight, encoder_eng_out))
+            logging.info(f"moe_encoder_out-{moe_encoder_out.shape}")
+        assert moe_encoder_out.size(0) == speech.size(0), (
+            moe_encoder_out.size(),
             speech.size(0),
         )
-        if (
-            getattr(self.encoder, "selfattention_layer_type", None) != "lf_selfattn"
-            and not self.is_encoder_whisper
-        ):
-            assert encoder_out.size(-2) <= encoder_out_lens.max(), (
-                encoder_out.size(),
-                encoder_out_lens.max(),
-            )
+        # if (
+        #     getattr(self.encoder, "selfattention_layer_type", None) != "lf_selfattn"
+        #     and not self.is_encoder_whisper
+        # ):
+        #     assert encoder_out.size(-2) <= encoder_out_lens.max(), (
+        #         encoder_out.size(),
+        #         encoder_out_lens.max(),
+        #     )
 
-        if intermediate_outs is not None:
-            return (encoder_out, intermediate_outs), encoder_out_lens
+        # if intermediate_outs is not None:
+        #     return (encoder_out, intermediate_outs), encoder_out_lens
 
-        return encoder_out, encoder_out_lens
+        return moe_encoder_out, encoder_out_lens
 
     def _extract_feats(
         self, speech: torch.Tensor, speech_lengths: torch.Tensor
@@ -640,13 +651,13 @@ class ESPnetASRModel(AbsESPnetModel):
         text = text[:, : text_lengths.max()]
 
         # 1. Encoder
-        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
-        if isinstance(encoder_out, tuple):
-            encoder_out = encoder_out[0]
+        moe_encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+        if isinstance(moe_encoder_out, tuple):
+            moe_encoder_out = moe_encoder_out[0]
 
         # Calc CTC loss
         do_reduce = self.ctc.reduce
         self.ctc.reduce = False
-        loss_ctc = self.ctc(encoder_out, encoder_out_lens, text, text_lengths)
+        loss_ctc = self.ctc(moe_encoder_out, encoder_out_lens, text, text_lengths)
         self.ctc.reduce = do_reduce
         return loss_ctc

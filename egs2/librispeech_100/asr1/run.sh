@@ -9,18 +9,17 @@ train_set="train_clean_100"
 valid_set="dev"
 test_sets="test_clean test_other dev_clean dev_other"
 
-asr_config=conf/train_asr.yaml
-inference_config=conf/decode_asr.yaml
+asr_config=conf/tuning/train_asr_transformer_ctc_e15.yaml
+inference_config=conf/decode_asr_ctc.yaml
 
 ./asr.sh \
     --lang en \
-    --ngpu 1 \
+    --ngpu 2 \
     --nj 16 \
     --gpu_inference true \
     --inference_nj 2 \
-    --nbpe 5000 \
+    --nbpe 3000 \
     --max_wav_duration 30 \
-    --speed_perturb_factors "0.9 1.0 1.1" \
     --audio_format "flac.ark" \
     --feats_type raw \
     --use_lm false \
@@ -29,5 +28,6 @@ inference_config=conf/decode_asr.yaml
     --train_set "${train_set}" \
     --valid_set "${valid_set}" \
     --test_sets "${test_sets}" \
+    --inference_asr_model "valid.cer_ctc.ave.pth" \
     --lm_train_text "data/${train_set}/text" \
     --bpe_train_text "data/${train_set}/text" "$@"

@@ -72,7 +72,7 @@ ngram_exp=
 ngram_num=3
 
 # Language model related
-use_lm=true       # Use language model for ASR decoding.
+use_lm=false       # Use language model for ASR decoding.
 lm_tag=           # Suffix to the result dir for language model training.
 lm_exp=           # Specify the directory path for LM experiment.
                   # If this option is specified, lm_tag is ignored.
@@ -1251,6 +1251,7 @@ if ! "${skip_train}"; then
                 --valid_shape_file "${asr_stats_dir}/valid/speech_shape" \
                 --resume true \
                 ${pretrained_model:+--init_param $pretrained_model} \
+                --init_param /share/nas165/jamieyang/14espnet_biencoder/egs2/aishell/asr1/exp/asr_train_asr_transformer_ctc_e15_raw_zh_char_sp/valid.cer_ctc.ave.pth:encoder:encoder_man /share/nas165/jamieyang/14espnet_biencoder/egs2/librispeech_100/asr1/exp/asr_train_asr_transformer_ctc_e15_raw_en_bpe3000/valid.cer_ctc.ave.pth:encoder:encoder_eng  \
                 --ignore_init_mismatch ${ignore_init_mismatch} \
                 --fold_length "${_fold_length}" \
                 --output_dir "${asr_exp}" \

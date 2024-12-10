@@ -12,9 +12,8 @@ train_set="train"
 valid_set="valid"
 test_sets="devman devsge"
 
-asr_config=conf/tuning/train_asr_conformer.yaml
-lm_config=conf/tuning/train_lm_transformer.yaml
-inference_config=conf/decode_asr.yaml
+asr_config=conf/tuning/train_asr_transformer_ctc_e15.yaml
+inference_config=conf/decode_asr_ctc.yaml
 
 if [ ! -f "data/train/token.man.2" ]; then
     # must preprocess data first to get Mandarin character tokens
@@ -40,15 +39,14 @@ nbpe=$((3000 + man_chars + 4))  # 5626
     --stop_stage ${stop_stage} \
     --nbpe ${nbpe} \
     --bpe_nlsyms "${bpe_nlsyms}" \
-    --speed_perturb_factors "0.9 1.0 1.1" \
     --max_wav_duration 30 \
     --asr_config "${asr_config}" \
-    --lm_config "${lm_config}" \
     --inference_config "${inference_config}" \
     --train_set "${train_set}" \
     --valid_set "${valid_set}" \
     --test_sets "${test_sets}" \
     --lm_train_text "data/${train_set}/text" \
     --bpe_train_text "data/${train_set}/text.eng.bpe" \
+    --inference_asr_model "valid.loss_ctc.ave.pth" \
     --score_opts "-e utf-8 -c NOASCII" \
     "$@"

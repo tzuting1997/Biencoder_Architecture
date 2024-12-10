@@ -60,6 +60,7 @@ from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from espnet2.asr.postencoder.hugging_face_transformers_postencoder import (
     HuggingFaceTransformersPostEncoder,
 )
+from espnet2.asr.postencoder.moe import MoE
 from espnet2.asr.preencoder.abs_preencoder import AbsPreEncoder
 from espnet2.asr.preencoder.linear import LinearProjection
 from espnet2.asr.preencoder.sinc import LightweightSincConvs
@@ -162,6 +163,7 @@ postencoder_choices = ClassChoices(
     name="postencoder",
     classes=dict(
         hugging_face_transformers=HuggingFaceTransformersPostEncoder,
+        moe=MoE,
     ),
     type_check=AbsPostEncoder,
     default=None,
@@ -526,11 +528,12 @@ class ASRTask(AbsTask):
 
         # 4. Encoder
         encoder_class = encoder_choices.get_class(args.encoder)
-        encoder = encoder_class(input_size=input_size, **args.encoder_conf)
+        encoder_man = encoder_class(input_size=input_size, **args.encoder_conf)
+        encoder_eng = encoder_class(input_size=input_size, **args.encoder_conf)
 
         # 5. Post-encoder block
         # NOTE(kan-bayashi): Use getattr to keep the compatibility
-        encoder_output_size = encoder.output_size()
+        encoder_output_size = encoder_man.output_size()
         if getattr(args, "postencoder", None) is not None:
             postencoder_class = postencoder_choices.get_class(args.postencoder)
             postencoder = postencoder_class(
@@ -553,7 +556,7 @@ class ASRTask(AbsTask):
 
                 joint_network = JointNetwork(
                     vocab_size,
-                    encoder.output_size(),
+                    encoder_man.output_size(),
                     decoder.dunits,
                     **args.joint_net_conf,
                 )
@@ -584,7 +587,8 @@ class ASRTask(AbsTask):
             specaug=specaug,
             normalize=normalize,
             preencoder=preencoder,
-            encoder=encoder,
+            encoder_man=encoder_man,
+            encoder_eng=encoder_eng,
             postencoder=postencoder,
             decoder=decoder,
             ctc=ctc,
